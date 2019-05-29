@@ -26,7 +26,9 @@ Menu commands (tab completion works!):
 
 Tested and working on Kali.
 Clean installs of other linux flavors most likely need the following:
+
 apt install mysql-server python python-mysqldb php libapache2-mod-php php-mysql -y
+
 a2enmod php
 
 ===========================================
