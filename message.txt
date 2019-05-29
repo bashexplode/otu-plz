@@ -1,0 +1,14 @@
+﻿<html>
+<table border="1" cellpadding="20">
+<tr><td><b>#{name}, you have received a secure message from your friend</b></td></tr>
+<tr><td>
+If you have concerns about the validity of this message, contact the original sender directly.<br><br>
+To retrieve your encrypted message, follow these steps:<br><br>
+1. Click the following link: <a href=#{url}>https://securemessage.com/newMessage.php</a><br><br>
+If you are a first time user, you will be asked to register an account. Please complete all fields on the registration screen and you will receive an email back to confirm your account, return to the open envelope when done.<br><br>
+2. Enter your password and click the OPEN button.<br><br>
+NOTE: All encrypted messages have a 15 day expiration from the original send date. If you need the data for future reference please save the attachments to your local machine before the secure envelope expires.<br><br>
+If you still need assistance feel free to contact us at mail@securemessage.com.
+</td></tr>
+</table>
+</html>
