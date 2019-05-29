@@ -41,3 +41,7 @@ Suggested Improvements:
 Author:
 
 Jesse Nebling (@bashexplode)
+
+License:
+
+This script is under the BSD 3-Clause license.
