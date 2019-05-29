@@ -16,13 +16,13 @@ Menu commands (tab completion works!):
 
 	Set a variable for the current module:	set <variable> <value>
 	
-	Show all variables for current module:	show OR options
+	Show all variables for current module:	show OR options OR help
 	
-	Execute module:							execute OR run
+	Execute module:				execute OR run
 	
-	Go back to main menu:					back
+	Go back to main menu:			back
 	
-	Exit script:							exit
+	Exit script:				exit
 
 ===========================================
 
