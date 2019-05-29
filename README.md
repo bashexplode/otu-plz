@@ -42,6 +42,7 @@ Author:
 
 Jesse Nebling (@bashexplode)
 
-License:
+#### License:
 
-This script is under the BSD 3-Clause license.
+This script is under the [BSD 3-Clause license](https://raw.githubusercontent.com/bashexplode/Invoke-LateralMovement/master/LICENSE).
+
