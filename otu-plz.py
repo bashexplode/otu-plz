@@ -18,10 +18,16 @@ import readline
 import re
 import smtplib
 import traceback
-from datetime import datetime
-from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+import pickle
+import base64
+from googleapiclient.discovery import build
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from googleapiclient import errors, discovery
+from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
+from datetime import datetime
 from email import encoders
 
 readline.parse_and_bind("tab: complete")
@@ -50,10 +56,10 @@ class mysqldbcreation:
         # If not add it so we're not exposing our mysql dbs on the internet
         print("[*] Checking if my.cnf is in the standard location..")
         if cmdline("ls /etc/mysql/my.cnf"):
-            if "[mysqld]" not in cmdline("cat /etc/mysql/my.cnf").split("\n"):
+            if "[mysqld]" not in cmdline("cat /etc/mysql/my.cnf").decode("utf-8").split("\n"):
                 print("[+] Adding msqld group tag to my.cnf.")
                 cmdline("echo [mysqld] >> /etc/mysql/my.cnf")
-            if "skip-networking" not in cmdline("cat /etc/mysql/my.cnf").split("\n"):
+            if "skip-networking" not in cmdline("cat /etc/mysql/my.cnf").decode("utf-8").split("\n"):
                 print("[!] Security first kiddies.")
                 print("[+] Adding skip-networking flag under [mysqld] group in my.cnf")
                 cmdline("sed -i '/\[mysqld\]/a skip-networking' /etc/mysql/my.cnf")
@@ -61,7 +67,7 @@ class mysqldbcreation:
             print("I wrote this for Debian distros, your mysql conf file is not in the spot for those distros \
             [/etc/mysql/my.cnf]")
             print("If you continue your mysql database will be exposed to the the network.")
-            continue_prompt = raw_input("Would you like to continue? (y/N): ")
+            continue_prompt = input("Would you like to continue? (y/N): ")
             if not continue_prompt.lower() == 'yes' and not continue_prompt.lower() == 'y':
                 exit()
 
@@ -69,12 +75,12 @@ class mysqldbcreation:
         # Script should be run as user who can start and interact with mysql
         # Check if mysql is running, if not start it up
         print("[*] Checking if MySQL is running...")
-        msqlr = subprocess.Popen("sudo /bin/netstat -al".split(), stdout=subprocess.PIPE).stdout
-        grep = subprocess.Popen(["/bin/grep", "mysql"], stdin=msqlr, stdout=subprocess.PIPE).stdout
-        msqlrLines = grep.read().split("\n")
-        vals = map(string.strip, msqlrLines[0].split())
-        # print vals
-        if len(vals) and vals[-1] in ("LISTENING", "/var/run/mysqld/mysqld.sock"):
+        msqlr = cmdline("sudo /bin/netstat -al").decode("utf-8").split('\n')
+        mysqlrunning = False
+        for line in msqlr:
+            if "LISTENING" in line and "/var/run/mysqld/mysqld.sock" in line:
+                mysqlrunning = True
+        if mysqlrunning:
             print("[+] MySQL is running.")
             cmdline('sudo service mysql restart')
         else:
@@ -96,7 +102,7 @@ class mysqldbcreation:
             print("[*] Creating %s database user..." % self.user)
             sql = "CREATE USER '%s'@'localhost' IDENTIFIED BY '%s'" % (self.user, self.password)
             cursor.execute(sql)
-            print("[+] %s database user created.") % self.user
+            print("[+] %s database user created." % self.user)
 
     def dbuserpermcheck(self):
         conn = MySQLdb.connect(host="localhost")
@@ -134,7 +140,7 @@ class mysqldbcreation:
                 print("[*] Creating %s database..." % self.db)
                 sql = 'CREATE DATABASE IF NOT EXISTS %s' % self.db
                 cursor.execute(sql)
-                print("[+] %s database created.") % self.db
+                print("[+] %s database created." % self.db)
         except TypeError:
             print("[!] Invalid username and/or password was used for MySQL database.")
 
@@ -269,7 +275,7 @@ class OTU:
 # Class created by Jesse Nebling (@bashexplode)
 # A script that generates a php file to redirect users to one time payloads
 class OTUPHP:
-    def __init__(self, user, pwd, db, expire, primeredirect, otherredirect, times, outfile, urlparam):
+    def __init__(self, user, pwd, db, expire, primeredirect, otherredirect, times, outfile, urlparam, notokenpage):
         self.user = user
         self.password = pwd
         self.db = db
@@ -280,108 +286,102 @@ class OTUPHP:
         self.outfile = outfile
         self.phpfile = ""
         self.urlparam = urlparam
+        self.notokenpage = notokenpage
 
     def generate(self):
         self.phpfile = """<?php
-        $servername = "localhost";
-        $username = "%s";
-        $password = "%s";
-        $dbname = "%s";
-        $param = "%s";
+$servername = "localhost";
+$user = "%s";
+$password = "%s";
+$dbname = "%s";
+$param = "%s";
 
-        try {
-                $conn = new PDO("mysql:host=$servername;dbname=$dbname", $username, $password);
-                // set the PDO error mode to exception
-                $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-                // echo "Connected successfully"."<br>";;
-            }
-        catch(PDOException $e)
-            {
-            // echo "Connection failed: " . $e->getMessage()."<br>";;
-            }
+$conn = new mysqli($servername, $user, $password, $dbname);
+if ($conn->connect_errno) {
+        echo "Failed to connect to MySQL: (" . $mysqli->connect_errno . ") " . $mysqli->connect_error;
+}
 
-        // retrieve token
-        if (isset($_GET[$param]) && preg_match('/^[0-9A-Za-z]{40}$/i', $_GET[$param])) {
-                $token = $_GET[$param];
-                //echo "token was set"."<br>";;
-        }
-        else {
-                //echo "token not set"."<br>";
-                // +======== REPLACE LINK HERE =========+
-                header( 'Location: https://www.wikipedia.com/' );
-                throw new Exception("Valid token not provided.");
-        }
+// retrieve token
+if (isset($_GET[$param]) && preg_match('/^[0-9A-Za-z]{40}$/i', $_GET[$param])) {
+        $token = $_GET[$param];
+        //echo "token was set"."<br>";;
+}
+else {
+        //echo "token not set"."<br>";
+        // +======== REPLACE LINK HERE =========+
+        header( 'Location: %s' );
+        throw new Exception("Valid token not provided.");
+}
 
-        // verify token
-        $query = $conn->prepare("SELECT user, createdTstamp, timesExecuted FROM tokens WHERE token = ?");
-        $query->execute(array($token));
-        $row = $query->fetch(PDO::FETCH_ASSOC);
-        $query->closeCursor();
+// verify token
+$query = "SELECT user, createdTstamp, timesExecuted FROM tokens WHERE token = '$token'";
+$result = $conn->query($query);
+$row = $result -> fetch_row();
+$result->close();
 
-        if ($row) {
-                //echo "token was verified"."<br>";
-                $timesExecuted = (int) $row['timesExecuted'];
-                $createdTstamp = (int) $row['createdTstamp'];
-                //echo $row['user'] . "<br>";
-                //echo $row['createdTstamp'] . "<br>";
-                //extract($row);
-        }
-        else {
-                //echo "token is not valid" . "<br>";
-                // +======== REPLACE LINK HERE =========+
-                header( 'Location: https://www.google.com/' );
-                throw new Exception("Valid token not provided.");
-        }
+if ($row) {
+        //echo "token was verified"."<br>";
+        $timesExecuted = (int) $row[2]; // timeExecuted
+        $createdTstamp = (int) $row[1]; // createdTstamp
+        //echo $row[0] . "<br>"; // user
+}
+else {
+        //echo "token is not valid" . "<br>";
+        // +======== REPLACE LINK HERE =========+
+        header( 'Location: %s' );
+        throw new Exception("Valid token not provided.");
+}
 
-        // set timestamp to update db on first executed time and perform time check
-        $timestamp = time();
-        $delta = %s;
+// set timestamp to update db on first executed time and perform time check
+$timestamp = time();
+$delta = %s;
 
-        if ($_SERVER["REQUEST_TIME"] - $createdTstamp > $delta) {
-            // +======== REPLACE LINK HERE =========+
-            // do other action, like redirect to fake payload
-            header( 'Location: %s' );
-            throw new Exception("Token has expired.");
-        }
+if ($_SERVER["REQUEST_TIME"] - $createdTstamp > $delta) {
+    // +======== REPLACE LINK HERE =========+
+    // do other action, like redirect to fake payload
+    header( 'Location: %s' );
+    throw new Exception("Token has expired.");
+}
 
-        // check if the token was ever used
-        if ($timesExecuted <= %s) {
-                echo "Never executed";
+// check if the token was ever used
+if ($timesExecuted <= %s) {
+        //echo "Never executed";
 
-                // Add the first executed time stamp to db
-                $query = $conn->prepare("UPDATE tokens SET firstExecutedTstamp = ? WHERE token = ?");
-                $query->bindParam(1, $tstamp);
-                $query->bindParam(2, $tokes);
-                $tstamp = $timestamp;
-                $tokes = $token;
-                $query->execute();
-                $query->closeCursor();
+        // Add the first executed time stamp to db
+        $query = $conn->prepare("UPDATE tokens SET firstExecutedTstamp = ? WHERE token = ?");
+        $query->bind_param('is', $tstamp, $tokes);
+        $tstamp = $timestamp;
+        $tokes = $token;
+        $query->execute();
+        $query->close();
 
-                //Add counter so the token can't be used more than once
-                $query = $conn->prepare("UPDATE tokens SET timesExecuted = timesExecuted + 1 WHERE token = ?");
-                $query->execute(array($token));
-                $query->closeCursor();
+        //Add counter so the token can't be used more than once
+        $query = $conn->prepare("UPDATE tokens SET timesExecuted = timesExecuted + 1 WHERE token = ?");
+        $query->bind_param('s', $tokes);
+        $tokes = $token;
+        $query->execute();
+        $query->close();
 
-                // +======== REPLACE LINK HERE =========+
-                // do one-time action here, like redirecting to real payload
-                header( 'Location: %s' );
-        }
-        else {
-                echo "Executed " . $row['timesExecuted'] . " times";
+        // +======== REPLACE LINK HERE =========+
+        // do one-time action here, like redirecting to real payload
+        header( 'Location: %s' );
+}
+else {
+        //echo "Executed " . $row[2] . " times";
 
-                //Add counter to see how many times the user or the pesky IR team tries to execute
-                $query = $conn->prepare("UPDATE tokens SET timesExecuted = timesExecuted + 1 WHERE token = ?");
-                $query->execute(array($token));
-                $query->closeCursor();
+        //Add counter to see how many times the user or the pesky IR team tries to execute
+        $query = $conn->prepare("UPDATE tokens SET timesExecuted = timesExecuted + 1 WHERE token = ?");
+        $query->bind_param('s', $tokes);
+        $tokes = $token;
+        $query->execute();
+        $query->close();
 
-                // +======== REPLACE LINK HERE =========+
-                // do other action, like redirect to fake payload
-                header( 'Location: %s' );
+        // +======== REPLACE LINK HERE =========+
+        // do other action, like redirect to fake payload
+        header( 'Location: %s' );
+}
 
-        }
-
-
-?>""" % (self.user, self.password, self.db, self.urlparam, self.expiry, self.redirecttwo, self.times, self.redirectone, self.redirecttwo)
+?>""" % (self.user, self.password, self.db, self.urlparam, self.notokenpage, self.notokenpage, self.expiry, self.redirecttwo, self.times, self.redirectone, self.redirecttwo)
 
     def display(self):
         print(self.phpfile)
@@ -397,7 +397,7 @@ class OTUPHP:
 
 # Ripped, modified, and turned into a class from mass_email.py by Clinton Mueller, which was based on sendmail.rb
 class Sendmail:
-    def __init__(self, username, password, dbname, sendids, addr_from, smtp_pass, subject, smtpsrv, smtpport, messagef, url, url_param, attachment):
+    def __init__(self, username, password, dbname, sendids, addr_from, smtp_pass, subject, smtpsrv, smtpport, messagef, url, url_param, attachment, gapi, tokenfile):
         self.addr_from = addr_from
         self.smtp_pass = smtp_pass
         self.subject = subject
@@ -411,6 +411,8 @@ class Sendmail:
         self.password = password
         self.dbname = dbname
         self.sendids = sendids
+        self.gapi = gapi
+        self.token_file = tokenfile
 
     def check(self):
         # Check if the emails, message, and attachment files exist
@@ -418,8 +420,12 @@ class Sendmail:
             raise ValueError("[-] The message file " + self.message_file + " does not exist.")
         if not self.addr_from:
             raise ValueError("[-] smtp_sender_email is not set.")
-        if not self.smtp_pass:
-            raise ValueError("[-] smtp_password is not set.")
+        if self.gapi:
+            if not self.token_file:
+                raise ValueError("[-] token_file is not set.")
+        else:
+            if not self.smtp_pass:
+                raise ValueError("[-] smtp_password is not set.")
         if not self.subject:
             raise ValueError("[-] subject is not set.")
         if not self.URL:
@@ -473,13 +479,82 @@ class Sendmail:
                 user = record[0][2]
                 emailaddr = record[0][3]
                 customizedmessage = self.customMessage(token, user)
-                self.sendMessage(emailaddr, customizedmessage)
+
+                if self.gapi:
+                    self.sendMessageGAPI(emailaddr, customizedmessage)
+                else:
+                    self.sendMessage(emailaddr, customizedmessage)
             except TypeError:
                 print("[!] Error on send_id %s" % sendid)
                 print("[!] Invalid username and/or password was used for MySQL database.")
                 traceback.print_exc()
 
     # Function to send the emails
+    def sendMessageGAPI(self, email, message):
+        print("made it into gapi send")
+
+        SCOPES = ['https://www.googleapis.com/auth/gmail.send']
+
+        creds = None
+
+        if os.path.exists(self.token_file):
+            print("token exists")
+            with open(str(self.token_file), 'rb') as token:
+                creds = pickle.load(token)
+                print("token loaded")
+        # If there are no (valid) credentials available, let the user log in.
+        if not creds or not creds.valid:
+            print("creds not valid?")
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    'credentials.json', SCOPES)
+                creds = flow.run_local_server(port=0)
+            # Save the credentials for the next run
+            with open(self.token_file, 'wb') as token:
+                pickle.dump(creds, token)
+
+        print("moving on?")
+
+        service = build('gmail', 'v1', credentials=creds)
+
+        msg = MIMEMultipart()
+        msg["To"] = email
+        msg["From"] = self.addr_from
+        msg["Date"] = str(datetime.now())
+        msg["Subject"] = self.subject
+
+        html = MIMEText(message, "html")
+
+        # Add attachment if there is one
+        if self.attachment:
+            part = MIMEBase('application', "octet-stream")
+            part.set_payload(open(self.attachment, "rb").read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition',
+                            'attachment; filename="{0}"'.format(os.path.basename(self.attachment)))
+            msg.attach(part)
+
+        msg.attach(html)
+
+        raw = base64.urlsafe_b64encode(msg.as_string().encode('utf-8'))
+        raw = raw.decode('utf-8')
+        body = {'raw': raw}
+
+        print('[*] Sending email')
+        try:
+            message = (service.users().messages().send(userId="me", body=body)
+                       .execute())
+            print('[+] Message Sent Id: %s' % message['id'])
+            # return message
+        except errors.HttpError as error:
+            print('An error occurred: %s' % error)
+            print("[!] Message could not be sent. Check token_file, and smtp_sender_email.")
+
+        print("Sent email to: " + email + " at " + str(datetime.now()))
+
+    # Function to send the emails without api
     def sendMessage(self, email, message):
         msg = MIMEMultipart()
         msg["To"] = email
@@ -732,6 +807,7 @@ class Menu:
         self.times = 1
         self.php_filename = "otu.php"
         self.urlparam = "uid"
+        self.no_tokenpage = "https://www.facebook.com"
 
         # For OTU generation
         self.otu_user = "John Doe"
@@ -753,6 +829,8 @@ class Menu:
         self.message_file = None
         self.URL = "http://www.google.com/otu.php"
         self.attachment = None
+        self.google_api = False
+        self.token_file = "token.pickle"
 
         # Initialize dictionaries and initial menus
         self.mainmenu_actions = {}
@@ -813,6 +891,7 @@ class Menu:
             'set': self.set_vars,
             'exit': self.exit,
             'back': self.back,
+            'home': self.back,
             'info': self.display_vars,
             'show': self.display_vars,
             'options': self.display_vars,
@@ -880,12 +959,14 @@ class Menu:
                     "determines how long after creation the token is set to be valid (expires) [in seconds], "
                     "where the token redirects to if it has not been used yet (redirect_real), where the token "
                     "redirects to if it has been use more the n times (redirect_fake), and how many times it allows "
-                    "to be executed before redirecting to the fake payload/website (n_time_execution).",
+                    "to be executed before redirecting to the fake payload/website (n_time_execution). "
+                    "If the page is browsed to without having a token set at all, the default page will be redirect_token_notset.",
             'variables': {
                 'db_username': self.phpusername,
                 'db_password': self.phppassword,
                 'db_name': self.dbname,
                 'expires': self.expire,
+                'redirect_tokennotset': self.no_tokenpage,
                 'redirect_real': self.redir_one,
                 'redirect_fake': self.redir_two,
                 'n_time_execution': self.times,
@@ -917,7 +998,9 @@ class Menu:
         self.sendmail_vars = {
             'menu': "Sendmail with OTU",
             'desc': "This module sends a message file to selected user ids (default all, can be comma-delimited, "
-                    "ranges, or both) in the %s database" % self.dbname,
+                    "ranges, or both) in the %s database. If the Google Gmail Send API is being used, set to 'true' "
+                    "and set the token file. Additionally, the API will ignore the smtp_password field" 
+                    "" % self.dbname,
             'variables': {
                 'db_username': self.username,
                 'db_password': self.password,
@@ -931,7 +1014,9 @@ class Menu:
                 'url_param': self.urlparam,
                 'smtp_server': self.smtp_server,
                 'smtp_port': self.smtp_port,
-                'attachment': self.attachment
+                'attachment': self.attachment,
+                'google_api': self.google_api,
+                'token_file': self.token_file
             },
             'opts': "For the below options use 'set <variable> <option number>'\n\nsmtp_server options:\n1)\t\t "
                     "smtp.office365.com\n2)\t\t smtp.mail.yahoo.com\n3)\t\t smtp.gmail.com\nCustom)\t\t Type a custom "
@@ -996,6 +1081,8 @@ class Menu:
                 self.expire = int(value)
         elif variable == 'redirect_real':
             self.redir_one = value
+        elif variable == 'redirect_tokennotset':
+            self.no_tokenpage = value
         elif variable == 'redirect_fake':
             self.redir_two = value
         elif variable == 'n_time_execution':
@@ -1039,6 +1126,10 @@ class Menu:
                 self.attachment = None
             else:
                 self.attachment = value
+        elif variable == 'google_api':
+            self.google_api = value
+        elif variable == 'token_file':
+            self.token_file = value
         elif variable == 'send_ids':
             if value == "all":
                 dbaction = mysqldbcreation(self.username, self.password, self.dbname, None)
@@ -1050,7 +1141,7 @@ class Menu:
             else:
                 self.sendids = value
         else:
-            print ("Invalid variable name, please try again.\n")
+            print("Invalid variable name, please try again.\n")
         self.initialize_menu()
         self.currmenu()
 
@@ -1079,22 +1170,23 @@ class Menu:
     \_______  /____|  |______/           |____|   |_______ \/_______ |
             \/                                            \/        \/
     """)
-        print ("One-time URL token toolkit\n")
-        print ("If this is the first time running this script, it is recommended to choose option 1 before getting "
+        print("One-time URL token toolkit\n")
+        print("If this is the first time running this script, it is recommended to choose option 1 before getting "
                "started.")
-        print ("Type info or show options or show or something to view variables in each menu")
-        print ("Type 'set <variable name> <input>' to set variables")
-        print ("Type 'execute' or 'run' to execute current module with current variables\n")
-        print ("Please choose from the options below:")
-        print ("1)\t MySQL database setup")
-        print ("2)\t One-time URL generation")
-        print ("3)\t PHP code generation")
-        print ("4)\t Display current OTU database")
-        print ("5)\t Export current OTU database to CSV")
-        print ("6)\t Sendmail OTU database uploader")
-        print ("7)\t Sendmail with OTU")
-        print ("911)\t Nuke OTU database and reset MySQL configuration changes")
-        print ("\n0) Quit")
+        print("Type info or show options or show or something to view variables in each menu")
+        print("Type 'back' or 'home' to return to the main menu")
+        print("Type 'set <variable name> <input>' to set variables")
+        print("Type 'execute' or 'run' to execute current module with current variables\n")
+        print("Please choose from the options below:")
+        print("1)\t MySQL database setup")
+        print("2)\t One-time URL generation")
+        print("3)\t PHP code generation")
+        print("4)\t Display current OTU database")
+        print("5)\t Export current OTU database to CSV")
+        print("6)\t Sendmail OTU database uploader")
+        print("7)\t Sendmail with OTU")
+        print("911)\t Nuke OTU database and reset MySQL configuration changes")
+        print("\n0) Quit")
         self.main_menu()
 
         return
@@ -1103,7 +1195,7 @@ class Menu:
         self.currmenu = self.main_menu
         self.curractions = self.mainmenu_actions
         self.set_readline()
-        choice = raw_input("[otu-plz] >> ")
+        choice = input("[otu-plz] >> ")
         self.exec_menu(choice)
 
     # Execute menu
@@ -1126,7 +1218,7 @@ class Menu:
         self.module_exec = self.mysqlexec
         self.initialize_menu()
         self.set_readline()
-        choice = raw_input("[otu-db-creation] >> ")
+        choice = input("[otu-db-creation] >> ")
         self.exec_menu(choice)
         return
 
@@ -1153,7 +1245,7 @@ class Menu:
         self.module_exec = self.otugenexec
         self.initialize_menu()
         self.set_readline()
-        choice = raw_input("[otu-generation] >> ")
+        choice = input("[otu-generation] >> ")
         self.exec_menu(choice)
         return
 
@@ -1183,13 +1275,13 @@ class Menu:
         self.module_exec = self.phpgenexec
         self.initialize_menu()
         self.set_readline()
-        choice = raw_input("[otu-php-generation] >> ")
+        choice = input("[otu-php-generation] >> ")
         self.exec_menu(choice)
         return
 
     def phpgenexec(self):
         try:
-            otphj = OTUPHP(self.username, self.password, self.dbname, self.expire, self.redir_one, self.redir_two, self.times - 1, self.php_filename, self.urlparam)
+            otphj = OTUPHP(self.username, self.password, self.dbname, self.expire, self.redir_one, self.redir_two, self.times - 1, self.php_filename, self.urlparam, self.no_tokenpage)
             otphj.generate()
             otphj.writetofile()
         except TypeError:
@@ -1205,7 +1297,7 @@ class Menu:
         self.module_exec = self.displaydbexec
         self.initialize_menu()
         self.set_readline()
-        choice = raw_input("[otu-db-display] >> ")
+        choice = input("[otu-db-display] >> ")
         self.exec_menu(choice)
         return
 
@@ -1228,7 +1320,7 @@ class Menu:
         self.module_exec = self.exportdbexec
         self.initialize_menu()
         self.set_readline()
-        choice = raw_input("[otu-db-export] >> ")
+        choice = input("[otu-db-export] >> ")
         self.exec_menu(choice)
         return
 
@@ -1251,10 +1343,10 @@ class Menu:
         self.module_exec = self.nukedbexec
         self.initialize_menu()
         self.set_readline()
-        choice = raw_input("[otu-nuke] >> ")
+        choice = input("[otu-nuke] >> ")
         if choice.lower() == 'run' or choice.lower() == 'execute':
             print("Are you sure you want to completely delete your token database? [y/N]")
-            answer = raw_input("[otu-nuke] >> ")
+            answer = input("[otu-nuke] >> ")
             if answer.lower() == 'no' or answer.lower() == 'n' or answer.lower() == '':
                 self.main_menu()
         self.exec_menu(choice)
@@ -1279,7 +1371,7 @@ class Menu:
         self.module_exec = self.sendmailupload
         self.initialize_menu()
         self.set_readline()
-        choice = raw_input("[otu-sendmail-generation] >> ")
+        choice = input("[otu-sendmail-generation] >> ")
         self.exec_menu(choice)
         return
 
@@ -1303,13 +1395,13 @@ class Menu:
         self.module_exec = self.sendmailexec
         self.initialize_menu()
         self.set_readline()
-        choice = raw_input("[otu-sendmail] >> ")
+        choice = input("[otu-sendmail] >> ")
         self.exec_menu(choice)
         return
 
     def sendmailexec(self):
         try:
-            sendmailotu = Sendmail(self.username, self.password, self.dbname, self.sendids, self.addr_from, self.smtp_pass, self.subject, self.smtp_server, self.smtp_port, self.message_file, self.URL, self.urlparam, self.attachment)
+            sendmailotu = Sendmail(self.username, self.password, self.dbname, self.sendids, self.addr_from, self.smtp_pass, self.subject, self.smtp_server, self.smtp_port, self.message_file, self.URL, self.urlparam, self.attachment, self.google_api, self.token_file)
             sendmailotu.check()
             sendmailotu.executesend()
         except TypeError:
